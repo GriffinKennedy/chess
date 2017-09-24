@@ -1,0 +1,114 @@
+---
+title: "Mapping the common Routes of chess pieces in the FIDE 2015 tournament"
+author: "Griffin Kennedy"
+date: "9/21/2017"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library('rchess')
+library(tidyverse)
+library(stringr)
+library('foreach')
+library('doParallel')
+library(plyr)
+```
+
+
+```{r}
+data("chesswc")
+View(chesswc)
+```
+
+```{r}
+chesswc %>% count('event')
+chesswc <- chesswc %>% filter(event == "FIDE World Cup 2015")
+set.seed(123)
+pgn <- sample(chesswc$pgn, size = 1)
+str_sub(pgn, 0, 50)
+```
+
+```{r}
+chss <- Chess$new()
+chss$load_pgn(pgn)
+
+chss$history_detail() %>%
+  arrange(number_move) %>% 
+  head(10)
+```
+
+```{r}
+workers <- makeCluster(parallel::detectCores())
+registerDoParallel(workers)
+
+chesswc <- chesswc %>% mutate(game_id = seq(nrow(.)))
+
+dfmoves <- adply(chesswc %>% select(pgn, game_id), .margins = 1, function(x){
+  chss <- Chess$new()
+  chss$load_pgn(x$pgn)
+  chss$history_detail()
+  }, .parallel = TRUE, .paropts = list(.packages = c("rchess")))
+
+dfmoves <- tbl_df(dfmoves) %>% select(-pgn)
+dfmoves %>% filter(game_id == 1, piece == "g1 Knight")
+glimpse(dfmoves)
+```
+
+```{r}
+dfboard <- rchess:::.chessboarddata() %>%
+  select(cell, col, row, x, y, cc)
+
+head(dfboard)
+```
+
+```{r}
+dfpaths <- dfmoves %>%
+  left_join(dfboard %>% 
+            dplyr::rename(from = 'cell', 'x.from' = 'x', 'y.from' = 'y'),
+            by = "from") %>%
+  left_join(dfboard %>% 
+            dplyr::rename('to' = 'cell', 'x.to' = 'x', 'y.to' = 'y') %>%
+            select(-cc, -col, -row),
+            by = "to") %>%
+  mutate(x_gt_y = abs(x.to - x.from) > abs(y.to - y.from),
+         xy_sign = sign((x.to - x.from)*(y.to - y.from)) == 1,
+         x_gt_y_equal_xy_sign = x_gt_y == xy_sign)
+glimpse(dfpaths)
+```
+
+```{r}
+ggplot() +
+  geom_tile(data = dfboard, aes(x, y, fill = cc)) +
+  geom_curve(data = dfpaths %>% filter(piece == "b1 Knight",
+                                       x_gt_y_equal_xy_sign),
+             aes(x = x.from, y = y.from, xend = x.to, yend = y.to),
+             position = position_jitter(width = 0.075, height = 0.075),
+             curvature = 0.50, angle = -45, alpha = 0.05, color = "white", size = .85) +
+  geom_curve(data = dfpaths %>% filter(piece == "b1 Knight", 
+                                       !x_gt_y_equal_xy_sign),
+             aes(x = x.from, y = y.from, xend = x.to, yend = y.to),
+             position = position_jitter(width = 0.075, height = 0.075),
+             curvature = -0.50, angle = 45, alpha = 0.05, color = "white", size = .85) +
+  scale_fill_manual(values =  c("gray70", "grey90")) +
+  ggtitle("\nPath of the B1 Knight") +
+  coord_equal() + 
+  theme_bw() + 
+  theme(panel.border = element_blank(), 
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position = "none",
+        plot.title = element_text(hjust = 0.5),
+        axis.ticks = element_blank(),
+        axis.line.x = element_blank(),
+        axis.line.y = element_blank()) +
+  scale_y_continuous(name = '',
+                     breaks=c(0,1,2,3,4,5,6,7,8,9),
+                     labels = c('', 1,2,3,4,5,6,7,8,''),
+                     limits = c(0,9)) + 
+  scale_x_continuous(name = '',
+                     breaks=c(0,1,2,3,4,5,6,7,8,9),
+                     labels = c('','A','B','C','D','E','F','G', 'H', ''),
+                     limits = c(0,9))
+```
+
