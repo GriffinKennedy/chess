@@ -1,7 +1,7 @@
 library('rchess')
 library(tidyverse)
 
-Plot_My_Path <- function(pgn, piece, title = paste("Path of the", piece)){
+Plot_My_Path <- function(pgn, piece){
   
   #input: All variables are strings. 
   #output: graph of the path of the desired piece.
@@ -35,6 +35,7 @@ Plot_My_Path <- function(pgn, piece, title = paste("Path of the", piece)){
   
   #Last, plot the path of your piece
   piece_1 <- piece
+  title = paste("Path of the", piece)
   ggplot() +
     geom_tile(data = chessboard_df, aes(x, y, fill = cc)) +
     geom_curve(data = piecepath_df %>% filter(piece.x == piece_1,
