@@ -1,0 +1,131 @@
+
+#### Packages ####
+rm(list = ls())
+library("magrittr")
+library("plyr")
+library("dplyr")
+library("readr")
+library("stringr")
+library("RSQLite")
+
+
+#### Parameters ####
+PATH_RAWDATA  <- "data-raw"
+
+PATH_SQL      <- "data-sqlite"
+DB_NAME       <- "db.sqlite"
+DB_PATH       <- file.path(PATH_SQL, DB_NAME) 
+
+PATH_RDATA    <- "data-rdata"
+PATH_GZIP     <- "data-gzip"
+PATH_ALL      <- "data-all"
+
+VERBOSE       <- TRUE
+
+
+#### Folders ####
+plyr::l_ply(c(PATH_SQL, PATH_RDATA, PATH_GZIP, PATH_ALL), function(x){
+  unlink(x, recursive = TRUE)
+  file.remove(x)
+  dir.create(x)
+})
+
+db <- dbConnect(SQLite(), dbname = DB_PATH)
+db
+
+#### Process ####
+files_pgn <- dir(PATH_RAWDATA, pattern = ".*pgn$", full.names = TRUE)
+files_pgn
+
+f <- sample(files_pgn, size = 1)
+f
+load_times <- plyr::ldply(files_pgn, function(f){ # f <- sample(files_pgn, size = 1)
+  
+  t0 <- Sys.time()
+  
+  if (VERBOSE) print(f)
+  
+  flines <- readLines(f)
+  
+  where_is_no_info <- which(str_length(flines) == 0)
+  where_is_no_info <- where_is_no_info[seq(length(where_is_no_info)) %% 2 == 0]
+  where_is_no_info <- c(0, where_is_no_info)
+  
+  df_cuts <- data_frame(from = head(where_is_no_info, -1) + 1,
+                        to = tail(where_is_no_info, -1) - 1)
+  
+  df_games <- ldply(seq(nrow(df_cuts)), function(row){ # row <- 10
+    
+    pgn <- flines[seq(df_cuts[row, ]$from, df_cuts[row, ]$to)]
+    
+    ## data for moves
+    pgn2 <- pgn[seq(which(pgn == "") + 1, length(pgn))] %>% 
+      paste0(collapse = " ") 
+    
+    ## data game
+    headers <- pgn[seq(which(pgn == "")) - 1]
+    
+    data_keys <- str_extract(headers, "\\w+")
+    data_vals <- str_extract(headers, "\".*\"") %>% str_replace_all("\"", "")
+    
+    df_game <- t(data_vals) %>%
+      data.frame(stringsAsFactors = FALSE) %>%
+      setNames(data_keys) %>%
+      mutate(pgn = pgn2)
+    
+    df_game
+    
+  }, .progress = ifelse(VERBOSE, "text", "none")) %>% tbl_df()
+  
+  df_games <- df_games %>% 
+    select(Event, Site, Date, Round, White, Black, Result, #removed Round add in columns needed for data
+           WhiteElo, BlackElo, Opening, ECO, pgn) %>% 
+    mutate(Date = str_replace_all(Date, "\\.", "-"),
+           WhiteElo = as.numeric(WhiteElo),
+           BlackElo = as.numeric(BlackElo)) %>% 
+    setNames(tolower(names(.)))
+  
+  dbWriteTable(conn = db, name = "games", as.data.frame(df_games),
+               row.names = FALSE, append = TRUE)
+  
+  f2 <- str_replace(basename(f), "\\.\\w+", "")
+  
+  gz <- gzfile(file.path(PATH_GZIP,  sprintf("games_%s.txt.gz", f2)), "w")
+  write.table(df_games, file = gz, quote = FALSE, sep = "\t", row.names = FALSE)
+  close(gz)
+  
+  diff <- difftime(Sys.time(), t0, units = "hours")
+  
+  df_summary <- data_frame(f, ngames = nrow(df_games), time_hrs = diff)
+  
+  print(df_summary)
+  
+  df_summary
+  
+}, .progress = ifelse(VERBOSE, "text", "none"))
+
+load_times %>% summarise(sum(ngames), sum(time_hrs))
+
+#### Checks ####
+dbListTables(db)
+
+dbGetQuery(db, "select * from games where whiteelo > 2500 limit 10")
+dbGetQuery(db, "select count(1) from games")
+
+#### Disconnect ####
+dbDisconnect(db)
+
+#### Write in a one BIG file ####
+wcup17 <- plyr::ldply(dir(PATH_GZIP, full.names = TRUE), read_tsv)
+wcup17 <- tbl_df(wcup17)
+View(wcup17)
+
+gz <- gzfile(file.path(PATH_ALL, "chess-db.txt.gz"), "w")
+write.table(wcup17, file = gz, quote = FALSE, sep = "\t", row.names = FALSE)
+close(gz)
+
+save(wcup17, file = file.path(PATH_RDATA, "chess-db.RData"))
+
+# chesswc <- wcup17
+# save(chesswc, file = "../rchess/data/chesswc.rda")
+save(wcup17, file = file.path(PATH_RDATA, "chess-db.RData"))
